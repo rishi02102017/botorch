@@ -1,0 +1,74 @@
+name: ci-tmvn
+
+on:
+  push:
+    branches: [ ci/tmvn-log-prob-out-of-bounds ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      UV_SYSTEM_PYTHON: 1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: uv pip install pre-commit
+      - run: pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: test (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline, fixed]
+    env:
+      UV_SYSTEM_PYTHON: 1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 3
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Install dependencies (as in reusable_test.yml, latest)
+        run: |
+          uv pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+          uv pip install git+https://github.com/cornellius-gp/linear_operator.git
+          uv pip install git+https://github.com/cornellius-gp/gpytorch.git
+          uv pip install .[test]
+      - name: Restore unmodified source (baseline only)
+        if: matrix.variant == 'baseline'
+        run: |
+          git checkout HEAD~2 -- botorch/utils/probability/truncated_multivariate_normal.py
+          git diff --stat HEAD~2 -- botorch/
+      - name: Versions
+        run: python -c "import torch, gpytorch, linear_operator, botorch; print(torch.__version__, gpytorch.__version__, linear_operator.__version__, botorch.__version__)"
+      - name: Probe
+        run: |
+          python - <<'PY'
+          import torch
+          from botorch.utils.probability import TruncatedMultivariateNormal
+          d = 3
+          for batch in ((), (2,)):
+              loc = torch.zeros(*batch, d, dtype=torch.float64)
+              cov = torch.eye(d, dtype=torch.float64).expand(*batch, d, d)
+              bounds = torch.stack([loc - 1, loc + 1], dim=-1)
+              t = TruncatedMultivariateNormal(loc=loc, covariance_matrix=cov, bounds=bounds)
+              for sample in ((), (4, 1), (5, 4, 1)):
+                  inb = torch.zeros(*sample, d, dtype=torch.float64)
+                  oob = torch.full((*sample, d), 5.0, dtype=torch.float64)
+                  a, b = t.log_prob(inb), t.log_prob(oob)
+                  ok = a.shape == b.shape and a.dtype == b.dtype and a.device == b.device
+                  print(f"batch={batch} sample={sample} in: {a.dtype} {tuple(a.shape)} | oob: {b.dtype} {tuple(b.shape)} match={ok}")
+          PY
+      - name: test_log_prob
+        continue-on-error: ${{ matrix.variant == 'baseline' }}
+        run: pytest -ra test/utils/probability/test_truncated_multivariate_normal.py -k test_log_prob
+      - name: test/utils/probability
+        continue-on-error: ${{ matrix.variant == 'baseline' }}
+        run: pytest -ra test/utils/probability
