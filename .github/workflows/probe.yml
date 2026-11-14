@@ -28,5 +28,5 @@ jobs:
       - name: probes
         run: |
           mkdir run && cd run
-          python ../probe_pareto.py
-          python ../probe_misc.py
+          python ../probe_mixed.py
+          true
