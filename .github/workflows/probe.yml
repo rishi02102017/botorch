@@ -1,0 +1,32 @@
+name: probe
+on:
+  push:
+    branches: ["ci/probe-*"]
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [release, main]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          if [ "${{ matrix.variant }}" = release ]; then
+            pip install -q botorch gpytorch
+          else
+            pip install -q git+https://github.com/cornellius-gp/linear_operator.git git+https://github.com/cornellius-gp/gpytorch.git
+            pip install -q git+https://github.com/meta-pytorch/botorch.git
+          fi
+          pip list 2>/dev/null | grep -i -E "botorch|gpytorch|linear|^torch "
+      - name: probes
+        run: |
+          mkdir run && cd run
+          python ../probe_pareto.py
+          python ../probe_misc.py
